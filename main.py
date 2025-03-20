@@ -69,7 +69,7 @@ listener = composio_toolset.create_trigger_listener()
 def review_new_pr(event: TriggerEventData) -> None:
     # Convert event payload to string for review
     code_to_review = str(event.payload)
-
+    print("Code to Review ---- ", code_to_review)
     # Create a new thread with OpenAI
     thread = openai_client.beta.threads.create()
     openai_client.beta.threads.messages.create(
@@ -90,7 +90,9 @@ def review_new_pr(event: TriggerEventData) -> None:
         thread=thread,
     )
 
+    logger.success("Message Sent on Slack.")
 
-logger.info("Listener started!")
+
+logger.info("Listener started -------- ")
 logger.info("Create a PR to get the review")
 listener.wait_forever()
