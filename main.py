@@ -91,6 +91,6 @@ def review_new_pr(event: TriggerEventData) -> None:
     )
 
 
-logger.info("Listener started!")
+logger.info("Listener started -------- ")
 logger.info("Create a PR to get the review")
 listener.wait_forever()
