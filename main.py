@@ -2,9 +2,10 @@ import os
 
 from composio.client.collections import TriggerEventData
 from composio_openai import Action, ComposioToolSet
+from loguru import logger
 from openai import OpenAI
 
-channel_id = os.getenv("CHANNEL_ID", "D06CTHT56TD")
+channel_id = os.getenv("CHANNEL_ID", "")
 if channel_id == "":
     channel_id = input("Enter Channel id:")
 
@@ -18,10 +19,16 @@ if not openrouter_api_key:
             "OpenRouter API key is required. Set OPENROUTER_API_KEY in .env or enter it when prompted."
         )
 
+
+logger.info("Starting the OpenAI client setup.")
 openai_client = OpenAI(
+    ## just comment out api_key and base_url if you want to use OpenAI
+    ## make sure you change the `model` too if not using OpenRouter
     api_key=openrouter_api_key,
     base_url="https://openrouter.ai/api/v1",
 )
+
+logger.info("OpenAI client setup completed with API key provided.")
 
 code_review_assistant_prompt = (
     """
@@ -52,6 +59,8 @@ pr_agent_tools = composio_toolset.get_tools(
 )
 
 # Give openai access to all the tools
+model = "qwen/qwq-32b:free"
+logger.info(f"Model used - {model}")
 assistant = openai_client.beta.assistants.create(
     name="PR Review Assistant",
     description="An assistant to help you with reviewing PRs",
@@ -68,28 +77,37 @@ listener = composio_toolset.create_trigger_listener()
 ## Triggers when a new PR is opened
 @listener.callback(filters={"trigger_name": "github_pull_request_event"})
 def review_new_pr(event: TriggerEventData) -> None:
+    logger.info("New PR event received.")
+    logger.debug(f"Event payload: {event.payload}")
+
     # Using the information from Trigger, execute the agent
     code_to_review = str(event.payload)
+    logger.debug(f"Code to review: {code_to_review}")
+
     thread = openai_client.beta.threads.create()
+    logger.info(f"Created a new thread with ID: {thread.id}")
+
     openai_client.beta.threads.messages.create(
         thread_id=thread.id, role="user", content=code_to_review
     )
+    logger.info("Message sent to the thread for review.")
 
-    ## Let's print our thread
+    # Let's print our thread
     url = f"https://platform.openai.com/playground/assistants?assistant={assistant.id}&thread={thread.id}"
-    print("Visit this URL to view the thread: ", url)
+    logger.info(f"Visit this URL to view the thread: {url}")
 
-    # Execute Agent with integrations
-    # start the execution
+    logger.info("Executing agent with integrations.")
     run = openai_client.beta.threads.runs.create(
         thread_id=thread.id, assistant_id=assistant.id
     )
+    logger.info(f"Agent execution started with run ID: {run.id}")
 
     composio_toolset.wait_and_handle_assistant_tool_calls(
         client=openai_client,
         run=run,
         thread=thread,
     )
+    logger.info("Handled assistant tool calls successfully.")
 
 
 print("Listener started!")
