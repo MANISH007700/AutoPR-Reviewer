@@ -4,20 +4,18 @@ import dotenv
 from composio.client.collections import TriggerEventData
 from composio_openai import Action, ComposioToolSet
 from loguru import logger
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
-# Load environment variables from .env file
 dotenv.load_dotenv()
 
-# Get Slack channel ID from environment, prompt user if not set
 channel_id = os.getenv("CHANNEL_ID", "")
 if not channel_id:
     channel_id = input("Enter Slack Channel ID: ")
 
-# Initialize OpenAI client (expects OPENAI_API_KEY in environment)
-openai_client = OpenAI(api_key=os.environ["OPENROUTER_API_KEY"])
+openai_client = OpenAI(
+    api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1"
+)
 
-# Define the assistant's prompt with instructions
 code_review_assistant_prompt = (
     """
     You are an experienced code reviewer.
@@ -36,10 +34,7 @@ code_review_assistant_prompt = (
     """
 )
 
-# Initialize Composio toolset (expects COMPOSIO_API_KEY in environment if required)
 composio_toolset = ComposioToolSet()
-
-# Define tools for the assistant to use
 pr_agent_tools = composio_toolset.get_tools(
     actions=[
         Action.GITHUB_GET_A_PULL_REQUEST,
@@ -49,48 +44,51 @@ pr_agent_tools = composio_toolset.get_tools(
     ]
 )
 
-# Create the OpenAI assistant with tools
-assistant = openai_client.beta.assistants.create(
-    name="PR Review Assistant",
-    description="An assistant to help you with reviewing PRs",
-    instructions=code_review_assistant_prompt,
-    model="google/gemma-3-12b-it:free",
-    tools=pr_agent_tools,
-)
+try:
+    assistant = openai_client.beta.assistants.create(
+        name="PR Review Assistant",
+        description="An assistant to help you with reviewing PRs",
+        instructions=code_review_assistant_prompt,
+        model="openai/gpt-4o",  # Verify this model name
+        tools=pr_agent_tools,
+    )
+    logger.info("Assistant created successfully")
+except OpenAIError as e:
+    logger.error(f"Failed to create assistant: {e}")
+    exit(1)
 
-logger.info("Assistant is ready")
-
-# Create a trigger listener for GitHub pull request events
 listener = composio_toolset.create_trigger_listener()
 
 
-# Callback function to review new PRs
 @listener.callback(filters={"trigger_name": "github_pull_request_event"})
 def review_new_pr(event: TriggerEventData) -> None:
-    # Convert event payload to string for review
-    code_to_review = str(event.payload)
-    print("Code to Review ---- ", code_to_review)
-    # Create a new thread with OpenAI
-    thread = openai_client.beta.threads.create()
-    openai_client.beta.threads.messages.create(
-        thread_id=thread.id, role="user", content=code_to_review
-    )
+    try:
+        logger.info(f"Event payload: {event.payload}")
+        code_to_review = str(event.payload)
+        print("Code to Review ---- ", code_to_review)
 
-    logger.info("A PR is generated.")
+        thread = openai_client.beta.threads.create()
+        logger.info(f"Thread created: {thread.id}")
 
-    # Start assistant execution
-    run = openai_client.beta.threads.runs.create(
-        thread_id=thread.id, assistant_id=assistant.id
-    )
+        openai_client.beta.threads.messages.create(
+            thread_id=thread.id, role="user", content=code_to_review
+        )
+        logger.info("Message posted to thread")
 
-    # Handle tool calls (e.g., Slack posting, GitHub issue creation)
-    composio_toolset.wait_and_handle_assistant_tool_calls(
-        client=openai_client,
-        run=run,
-        thread=thread,
-    )
+        run = openai_client.beta.threads.runs.create(
+            thread_id=thread.id, assistant_id=assistant.id
+        )
+        logger.info(f"Run started: {run}")
 
-    logger.success("Message Sent on Slack.")
+        composio_toolset.wait_and_handle_assistant_tool_calls(
+            client=openai_client,
+            run=run,
+            thread=thread,
+        )
+        logger.success("Message Sent on Slack.")
+    except Exception as e:
+        logger.error(f"Error in review_new_pr: {e}")
+        raise
 
 
 logger.info("Listener started -------- ")
