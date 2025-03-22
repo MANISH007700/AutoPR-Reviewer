@@ -1,45 +1,47 @@
 import os
 
-import dotenv
 from composio.client.collections import TriggerEventData
 from composio_openai import Action, ComposioToolSet
-from loguru import logger
 from openai import OpenAI
 
-# Load environment variables from .env file
-dotenv.load_dotenv()
+channel_id = os.getenv("CHANNEL_ID", "D06CTHT56TD")
+if channel_id == "":
+    channel_id = input("Enter Channel id:")
 
-# Get Slack channel ID from environment, prompt user if not set
-channel_id = os.getenv("CHANNEL_ID", "")
-if not channel_id:
-    channel_id = input("Enter Slack Channel ID: ")
 
-# Initialize OpenAI client (expects OPENAI_API_KEY in environment)
-openai_client = OpenAI()
+# # Get OpenRouter API key
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+if not openrouter_api_key:
+    openrouter_api_key = input("Enter your OpenRouter API key: ")
+    if not openrouter_api_key:
+        raise ValueError(
+            "OpenRouter API key is required. Set OPENROUTER_API_KEY in .env or enter it when prompted."
+        )
 
-# Define the assistant's prompt with instructions
-code_review_assistant_prompt = (
-    """
-    You are an experienced code reviewer.
-    Your task is to review the provided file diff and give constructive feedback.
-
-    Follow these steps:
-    1. Identify if the file contains significant logic changes.
-    2. Summarize the changes in the diff in clear and concise English, within 100 words.
-    3. Provide actionable suggestions if there are any issues in the code.
-
-    Once you have decided on the changes, for any TODOs, create a Github issue.
-    And send the summary of the PR review to """
-    + channel_id
-    + """ channel on Slack. Slack doesn't have markdown, so send a plain text message.
-    Also add the comprehensive review to the PR as a comment.
-    """
+openai_client = OpenAI(
+    api_key=openrouter_api_key,
+    base_url="https://openrouter.ai/api/v1",
 )
 
-# Initialize Composio toolset (expects COMPOSIO_API_KEY in environment if required)
-composio_toolset = ComposioToolSet()
+code_review_assistant_prompt = (
+    """
+        You are an experienced code reviewer.
+        Your task is to review the provided file diff and give constructive feedback.
 
-# Define tools for the assistant to use
+        Follow these steps:
+        1. Identify if the file contains significant logic changes.
+        2. Summarize the changes in the diff in clear and concise English, within 100 words.
+        3. Provide actionable suggestions if there are any issues in the code.
+
+        Once you have decided on the changes, for any TODOs, create a Github issue.
+        And send the summary of the PR review to """
+    + channel_id
+    + """ channel on slack. Slack doesn't have markdown and so send a plain text message.
+        Also add the comprehensive review to the PR as a comment.
+"""
+)
+
+composio_toolset = ComposioToolSet()
 pr_agent_tools = composio_toolset.get_tools(
     actions=[
         Action.GITHUB_GET_A_PULL_REQUEST,
@@ -49,50 +51,47 @@ pr_agent_tools = composio_toolset.get_tools(
     ]
 )
 
-# Create the OpenAI assistant with tools
+# Give openai access to all the tools
 assistant = openai_client.beta.assistants.create(
     name="PR Review Assistant",
     description="An assistant to help you with reviewing PRs",
     instructions=code_review_assistant_prompt,
-    model="gpt-4o",
+    model="qwen/qwq-32b:free",
     tools=pr_agent_tools,
 )
+print("Assistant is ready")
 
-logger.info("Assistant is ready")
-
-# Create a trigger listener for GitHub pull request events
+## Create a trigger listener
 listener = composio_toolset.create_trigger_listener()
 
 
-# Callback function to review new PRs
+## Triggers when a new PR is opened
 @listener.callback(filters={"trigger_name": "github_pull_request_event"})
 def review_new_pr(event: TriggerEventData) -> None:
-    # Convert event payload to string for review
+    # Using the information from Trigger, execute the agent
     code_to_review = str(event.payload)
-    print("Code to Review ---- ", code_to_review)
-    # Create a new thread with OpenAI
     thread = openai_client.beta.threads.create()
     openai_client.beta.threads.messages.create(
         thread_id=thread.id, role="user", content=code_to_review
     )
 
-    logger.info("A PR is generated.")
+    ## Let's print our thread
+    url = f"https://platform.openai.com/playground/assistants?assistant={assistant.id}&thread={thread.id}"
+    print("Visit this URL to view the thread: ", url)
 
-    # Start assistant execution
+    # Execute Agent with integrations
+    # start the execution
     run = openai_client.beta.threads.runs.create(
         thread_id=thread.id, assistant_id=assistant.id
     )
 
-    # Handle tool calls (e.g., Slack posting, GitHub issue creation)
     composio_toolset.wait_and_handle_assistant_tool_calls(
         client=openai_client,
         run=run,
         thread=thread,
     )
 
-    logger.success("Message Sent on Slack.")
 
-
-logger.info("Listener started -------- ")
-logger.info("Create a PR to get the review")
+print("Listener started!")
+print("Create a pr to get the review")
 listener.wait_forever()
