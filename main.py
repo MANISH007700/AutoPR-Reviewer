@@ -4,7 +4,7 @@ from composio.client.collections import TriggerEventData
 from composio_openai import Action, ComposioToolSet
 from openai import OpenAI
 
-channel_id = os.getenv("CHANNEL_ID", "")
+channel_id = os.getenv("CHANNEL_ID", "D06CTHT56TD")
 if channel_id == "":
     channel_id = input("Enter Channel id:")
 
@@ -56,7 +56,7 @@ assistant = openai_client.beta.assistants.create(
     name="PR Review Assistant",
     description="An assistant to help you with reviewing PRs",
     instructions=code_review_assistant_prompt,
-    model="gpt-4o",
+    model="qwen/qwq-32b:free",
     tools=pr_agent_tools,
 )
 print("Assistant is ready")
