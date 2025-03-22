@@ -1,21 +1,21 @@
 import os
 
-import dotenv
 from composio.client.collections import TriggerEventData
 from composio_openai import Action, ComposioToolSet
-from loguru import logger
-from openai import OpenAI, OpenAIError
+from openai import OpenAI  # We'll use this as a compatible client for OpenRouter
 
-dotenv.load_dotenv()
-
+# Initialize environment variables and channel ID
 channel_id = os.getenv("CHANNEL_ID", "")
 if not channel_id:
-    channel_id = input("Enter Slack Channel ID: ")
+    channel_id = input("Enter Channel ID: ")
 
-openai_client = OpenAI(
-    api_key=os.getenv("OPENROUTER_API_KEY"), base_url="https://openrouter.ai/api/v1"
+# Initialize OpenRouter client (using OpenAI client with OpenRouter base URL and API key)
+openrouter_client = OpenAI(
+    api_key=os.getenv("OPENROUTER_API_KEY"),  # Set your OpenRouter API key in env
+    base_url="https://openrouter.ai/api/v1",
 )
 
+# Code review assistant prompt
 code_review_assistant_prompt = (
     """
     You are an experienced code reviewer.
@@ -34,6 +34,7 @@ code_review_assistant_prompt = (
     """
 )
 
+# Initialize Composio tools
 composio_toolset = ComposioToolSet()
 pr_agent_tools = composio_toolset.get_tools(
     actions=[
@@ -44,53 +45,66 @@ pr_agent_tools = composio_toolset.get_tools(
     ]
 )
 
-try:
-    assistant = openai_client.beta.assistants.create(
+
+# Create assistant with configurable OpenRouter model
+def create_assistant(
+    model="google/gemma-3-12b-it:free",
+):  # Default to Claude 3.5 Sonnet
+    assistant = openrouter_client.beta.assistants.create(
         name="PR Review Assistant",
         description="An assistant to help you with reviewing PRs",
         instructions=code_review_assistant_prompt,
-        model="openai/gpt-4o",  # Verify this model name
+        model=model,  # Use OpenRouter model identifier
         tools=pr_agent_tools,
     )
-    logger.info("Assistant created successfully")
-except OpenAIError as e:
-    logger.error(f"Failed to create assistant: {e}")
-    exit(1)
+    return assistant
 
+
+# Initialize assistant with desired OpenRouter model
+assistant = create_assistant(model="anthropic/claude-3.5-sonnet")  # Change as needed
+print(f"Assistant is ready with model: {assistant.model}")
+
+# Create trigger listener
 listener = composio_toolset.create_trigger_listener()
 
 
+# Trigger handler for new PRs
 @listener.callback(filters={"trigger_name": "github_pull_request_event"})
 def review_new_pr(event: TriggerEventData) -> None:
     try:
-        logger.info(f"Event payload: {event.payload}")
+        # Extract code to review from event payload
         code_to_review = str(event.payload)
-        print("Code to Review ---- ", code_to_review)
 
-        thread = openai_client.beta.threads.create()
-        logger.info(f"Thread created: {thread.id}")
-
-        openai_client.beta.threads.messages.create(
+        # Create new thread
+        thread = openrouter_client.beta.threads.create()
+        openrouter_client.beta.threads.messages.create(
             thread_id=thread.id, role="user", content=code_to_review
         )
-        logger.info("Message posted to thread")
 
-        run = openai_client.beta.threads.runs.create(
+        # Provide thread URL for debugging (note: OpenRouter might not have a playground)
+        url = f"https://openrouter.ai/playground?assistant={assistant.id}&thread={thread.id}"
+        print("Visit this URL to view the thread (if supported): ", url)
+
+        # Execute assistant run
+        run = openrouter_client.beta.threads.runs.create(
             thread_id=thread.id, assistant_id=assistant.id
         )
-        logger.info(f"Run started: {run}")
 
+        # Handle tool calls and wait for completion
         composio_toolset.wait_and_handle_assistant_tool_calls(
-            client=openai_client,
+            client=openrouter_client,
             run=run,
             thread=thread,
         )
-        logger.success("Message Sent on Slack.")
+
     except Exception as e:
-        logger.error(f"Error in review_new_pr: {e}")
-        raise
+        print(f"Error reviewing PR: {str(e)}")
 
 
-logger.info("Listener started -------- ")
-logger.info("Create a PR to get the review")
-listener.wait_forever()
+# Start listener
+print("Listener started!")
+print("Create a PR to get the review")
+try:
+    listener.wait_forever()
+except KeyboardInterrupt:
+    print("Listener stopped by user")
