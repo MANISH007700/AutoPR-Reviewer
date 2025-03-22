@@ -4,7 +4,7 @@ import dotenv
 from composio.client.collections import TriggerEventData
 from composio_openai import Action, ComposioToolSet
 from loguru import logger
-from openai import OpenAI  # Still using OpenAI client but configured for OpenRouter
+from openai import OpenAI
 
 # Load environment variables from .env file
 dotenv.load_dotenv()
@@ -14,11 +14,8 @@ channel_id = os.getenv("CHANNEL_ID", "")
 if not channel_id:
     channel_id = input("Enter Slack Channel ID: ")
 
-# Initialize OpenAI client with OpenRouter configuration
-openai_client = OpenAI(
-    api_key=os.getenv("OPENROUTER_API_KEY"),  # Add your OpenRouter API key to .env
-    base_url="https://openrouter.ai/api/v1",
-)
+# Initialize OpenAI client (expects OPENAI_API_KEY in environment)
+openai_client = OpenAI(api_key=os.environ["OPENROUTER_API_KEY"])
 
 # Define the assistant's prompt with instructions
 code_review_assistant_prompt = (
@@ -52,12 +49,12 @@ pr_agent_tools = composio_toolset.get_tools(
     ]
 )
 
-# Create the OpenAI assistant with tools using OpenRouter model
+# Create the OpenAI assistant with tools
 assistant = openai_client.beta.assistants.create(
     name="PR Review Assistant",
     description="An assistant to help you with reviewing PRs",
     instructions=code_review_assistant_prompt,
-    model="google/gemma-3-12b-it:free",  # Using OpenRouter's model naming convention
+    model="google/gemma-3-12b-it:free",
     tools=pr_agent_tools,
 )
 
